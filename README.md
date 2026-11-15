@@ -1,4 +1,4 @@
-# KILN_Mainsail
+# mainsail-kiln
 
 > **Parts:** the printers, boards, readers and other gear that go with this project are listed at [projects.die-hard.net/gear](https://projects.die-hard.net/gear) (Amazon affiliate links).
 
@@ -44,7 +44,7 @@ password is `root`):
 
 ```sh
 cd /data/ad5x/plugins
-su klipper -s /bin/sh -c 'git clone https://github.com/DIEHARDave/KILN_Mainsail.git mainsail'
+su klipper -s /bin/sh -c 'git clone https://github.com/DIEHARDave/mainsail-kiln.git mainsail'
 sh /data/ad5x/plugins/mainsail/install.sh
 ```
 
@@ -70,6 +70,10 @@ without them.
   changed `root/mainsail-hook.sh`, run `install.sh` again as root.
 
 ## Renamed for Kiln OS 1.0
+
+This repository was `KILN_Mainsail` until 2026-11-15; old links and clones keep
+working (GitHub redirects them), and Moonraker switches an installed
+copy to the new address by itself at its next update check.
 
 Kiln OS 1.0 keeps names that start with `kiln` for itself, so the
 Software Updates entry is now `mainsail-kiln` (was `kiln-mainsail`). Nothing else
@@ -122,7 +126,7 @@ service (`S65ad5x-screen`, root, runs after nginx starts) sources
 `. /data/ad5x/mainsail-hook.sh` there. The screen service runs this
 even with the screen stream switched off (`SCREEN=off`). A screen
 restart sources it again, but it does nothing while nginx already runs
-the Mainsail config. [KILN_Camera](https://github.com/DIEHARDave/KILN_Camera)
+the Mainsail config. [KILN_Camera](https://github.com/DIEHARDave/camera-kiln)
 and [FF_NFC](https://github.com/DIEHARDave/FF_NFC) use the same
 file; they don't interfere.
 

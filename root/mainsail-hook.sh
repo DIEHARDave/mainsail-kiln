@@ -1,53 +1,56 @@
 #!/bin/sh
 #####################################################################
-# KILN_Mainsail root hook: Mainsail on port 80, Fluidd on port 81
-# (or the other way round: WEB swaps them)
+# mainsail-kiln root part: Mainsail on port 80, Fluidd on port 81
+# (or the other way round: WEB swaps them). Kiln OS plugin API 1.6 runs
+# it as root from root's copy of root/ (/data/ad5x/plugins-root/mainsail),
+# never from the clone user klipper owns:
+#   mainsail-hook.sh start   boot script S50mainsail (and install.sh)
+#   mainsail-hook.sh stop    stops the watcher (nginx keeps its config)
+#   mainsail-hook.sh off     Kiln's own setup back: Fluidd on 80 only
+#   mainsail-hook.sh watch   the watcher
 #
-# Kiln's nginx.conf (read-only image) serves Fluidd on port 80 only.
-# This hook builds /run/nginx/kiln-mainsail.conf from it, with its server
-# block twice:
-#   port 80: root /data/ad5x/web/mainsail (instead of fluidd-root.conf)
-#   port 81: Kiln's server as it is (Fluidd, fluidd-root.conf)
-# Both keep all of Kiln's locations (Moonraker API, websocket, webcams,
-# screen). Then it restarts nginx on that file, with Kiln's pid file, so
-# S63nginx stop/reload still work. If the build or "nginx -t" fails,
-# Kiln's own nginx stays as it is (Fluidd on 80).
+# Kiln's nginx.conf (read-only image) serves port 80 with the root in
+# /run/nginx/fluidd-root.conf (S61ad5x-web writes it at boot) and
+# includes root-owned extra servers from /data/ad5x/nginx/*.conf. This
+# hook:
+#   - writes /data/ad5x/nginx/mainsail.conf: Kiln's port 80 server block
+#     copied, on port 81, with the other UI's root. All of Kiln's
+#     locations (Moonraker API, websocket, webcams, screen) stay.
+#   - points fluidd-root.conf at the UI for port 80 (Kiln's own line is
+#     kept in /run/kiln-mainsail.fluidd-root for port 81 and "off")
+#   - checks the result with "nginx -t" and reloads Kiln's nginx; if the
+#     check fails, both files go back as they were.
 #
 # The WEB macro (plugin.cfg) saves web_port80 = 'mainsail' or 'fluidd' in
 # Klipper's variables.cfg. That file is writable by user klipper: it is
 # parsed, never sourced. 'fluidd' swaps the two roots (Fluidd on 80,
-# Mainsail on 81). A watcher ("mainsail-hook.sh watch", started once per
-# boot) applies a change within about 3 s.
-#
-# Kiln OS has no root boot hook for plugins; S65ad5x-screen (root, after
-# S63nginx) sources /data/ad5x/screen.conf, so install.sh adds
-#   . /data/ad5x/mainsail-hook.sh
-# there (a stopgap: camera.conf, used up to version 3, has been read as
-# settings only since Kiln v0.0.24). It is sourced again on every screen
-# restart: does nothing when nginx already runs the same config. Names
-# are prefixed (ms_): it runs inside S65ad5x-screen's start().
+# Mainsail on 81). The watcher applies a change within about 3 s.
 #
 # Kiln OS's own update entries ("Kiln OS", klipper, moonraker) have
 # configured_type kiln_os / kiln_app. Fluidd lists any type, Mainsail
 # drops the ones it doesn't know. ms_patch edits Mainsail's bundle so it
 # stores them as web entries (version > version, Update button, release
 # link from remote_url). Mainsail's own updates replace the bundle: the
-# watcher patches the new one (index.html's inode changes). On the
-# Mainsail port /assets/ is revalidated instead of cached for 30 days, so
-# browsers pick up the patched file.
-#
-# "mainsail-hook.sh off": back to Kiln's own nginx (uninstall.sh).
+# watcher patches the new one (index.html's inode changes). Mainsail on
+# port 81 revalidates /assets/ instead of caching them for 30 days, and
+# the service worker gets a new revision for the patched file, so
+# browsers pick it up.
 #####################################################################
 
-MS_HOOK_VERSION=4
+MS_HOOK_VERSION=5
 
 MS_ROOT=/data/ad5x/web/mainsail
 MS_KILN_CONF=/etc/nginx/nginx.conf
-MS_CONF=/run/nginx/kiln-mainsail.conf
+MS_EXTRA_DIR=/data/ad5x/nginx
+MS_EXTRA=$MS_EXTRA_DIR/mainsail.conf
+MS_ROOTFILE=/run/nginx/fluidd-root.conf
+MS_KILN_ROOT=/run/kiln-mainsail.fluidd-root
+MS_OLD_CONF=/run/nginx/kiln-mainsail.conf
 MS_PID=/run/nginx/nginx.pid
 MS_NGINX=/usr/sbin/nginx
+MS_SERVICE=/etc/init.d/S63nginx
 MS_VARS=/home/klipper/printer_data/config/variables.cfg
-MS_HOOK=/data/ad5x/mainsail-hook.sh
+MS_HOOK=/data/ad5x/plugins-root/mainsail/mainsail-hook.sh
 MS_WATCH_PID=/run/kiln-mainsail-watch.pid
 MS_PATCHED=/run/kiln-mainsail.patched
 
@@ -96,10 +99,15 @@ ms_patch() {
 	rm -f "$ms_js.kiln"
 }
 
-# nginx's master process runs with config $1
-ms_running_with() {
-	[ -f $MS_PID ] || return 1
-	tr '\0' ' ' < /proc/$(cat $MS_PID)/cmdline 2>/dev/null | grep -q -- "-c $1"
+# nginx runs from the 1.x hook's own copy of the config
+ms_old_running() {
+	[ -f $MS_PID ] &&
+		tr '\0' ' ' < /proc/$(cat $MS_PID)/cmdline 2>/dev/null |
+		grep -q -- "-c $MS_OLD_CONF"
+}
+
+ms_nginx_running() {
+	[ -f $MS_PID ] && kill -0 "$(cat $MS_PID)" 2>/dev/null
 }
 
 # The UI that WEB put on port 80: fluidd or mainsail (the default)
@@ -110,68 +118,107 @@ ms_port80() {
 	[ "$ms_v" = fluidd ] && echo fluidd || echo mainsail
 }
 
-# ms_build UI: the config with UI on port 80
+# Kiln's own root line for port 80 (Fluidd), saved the first time
+ms_kiln_root() {
+	if [ ! -s $MS_KILN_ROOT ]; then
+		if [ -f $MS_ROOTFILE ] && ! grep -q "$MS_ROOT" $MS_ROOTFILE; then
+			cp $MS_ROOTFILE $MS_KILN_ROOT
+		elif [ -f /data/ad5x/web/fluidd/index.html ]; then
+			echo "root /data/ad5x/web/fluidd;" > $MS_KILN_ROOT
+		else
+			echo "root /usr/share/fluidd;" > $MS_KILN_ROOT
+		fi
+	fi
+	cat $MS_KILN_ROOT
+}
+
+# ms_build UI: $MS_EXTRA.new (port 81, the other UI) and
+# $MS_ROOTFILE.new (port 80, UI)
 ms_build() {
-	awk -v ms="$MS_ROOT" -v sw=$([ "$1" = fluidd ] && echo 1 || echo 0) '
-	# one copy of the server block; port81: listen 81, mainsail: its root
-	function out(port81, mainsail,   i, l) {
-		for (i = 0; i < n; i++) {
-			l = blk[i]
-			if (mainsail && l ~ /include[ \t]+\/run\/nginx\/fluidd-root\.conf;/) {
-				sub(/include.*/, "root " ms ";", l); found_root = 1
-			}
-			# Mainsail assets revalidated (304s), not cached 30 days:
-			# browsers get the bundle ms_patch rewrote under the same name
-			if (mainsail && l ~ /expires[ \t]+30d;/)
-				sub(/expires.*/, "add_header Cache-Control \"no-cache\";", l)
-			if (port81 && sub(/listen[ \t]+80[ \t]+default_server;/, "listen 81;", l))
-				found_listen = 1
-			print l
-		}
+	ms_fluidd=$(ms_kiln_root)
+	if [ "$1" = fluidd ]; then
+		echo "$ms_fluidd" > $MS_ROOTFILE.new
+		ms_r81="root $MS_ROOT;"; ms_m81=1
+	else
+		echo "root $MS_ROOT;" > $MS_ROOTFILE.new
+		ms_r81=$ms_fluidd; ms_m81=0
+	fi
+	awk -v r81="$ms_r81" -v m81=$ms_m81 '
+	BEGIN {
+		print "# mainsail-kiln (root): the second web UI on port 81, a copy of"
+		print "# Kiln OS port 80 server. The plugin rewrites it: do not edit."
 	}
-	# relative includes are relative to the main config file: make them
-	# point at /etc/nginx, not /run/nginx
-	$0 ~ /include[ \t]+[^\/ \t]/ { sub(/include[ \t]+/, "include /etc/nginx/") }
-	# the server block, kept to print twice
 	!done && /^[ \t]*server[ \t]*\{/ { inblk = 1 }
 	inblk {
-		blk[n++] = $0
+		l = $0
+		if (l ~ /include[ \t]+\/run\/nginx\/fluidd-root\.conf;/) {
+			sub(/include.*/, r81, l); found_root = 1
+		}
+		if (sub(/listen[ \t]+80[ \t]+default_server;/, "listen 81;", l))
+			found_listen = 1
+		# Mainsail assets revalidated (304s), not cached 30 days:
+		# browsers get the bundle ms_patch rewrote under the same name
+		if (m81 && l ~ /expires[ \t]+30d;/)
+			sub(/expires.*/, "add_header Cache-Control \"no-cache\";", l)
+		print l
 		line = $0; sub(/#.*/, "", line)
 		depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
-		if (depth == 0) {
-			inblk = 0; done = 1
-			out(0, !sw)
-			print ""
-			out(1, sw)
-		}
-		next
+		if (depth == 0) { inblk = 0; done = 1 }
 	}
-	{ print }
 	END { if (!found_root || !found_listen) exit 1 }
-	' $MS_KILN_CONF > $MS_CONF.new
+	' $MS_KILN_CONF > $MS_EXTRA.new
+}
+
+# Kiln's nginx with the current files: reload it, or start it (instead
+# of the 1.x hook's copy, or when it doesn't run)
+ms_reload() {
+	if ms_old_running; then
+		start-stop-daemon -K -q -p $MS_PID
+		sleep 1
+		rm -f $MS_OLD_CONF
+		$MS_SERVICE start
+	elif ms_nginx_running; then
+		$MS_SERVICE reload
+	else
+		$MS_SERVICE start
+	fi
+}
+
+# ms_apply: the .new files in place, nginx -t, reload. On failure the
+# old files go back.
+ms_apply() {
+	for ms_f in $MS_EXTRA $MS_ROOTFILE; do
+		rm -f $ms_f.old
+		[ -f $ms_f ] && cp -p $ms_f $ms_f.old
+		chmod 644 $ms_f.new
+		mv $ms_f.new $ms_f
+	done
+	if ! $MS_NGINX -t -q 2>/dev/null; then
+		for ms_f in $MS_EXTRA $MS_ROOTFILE; do
+			if [ -f $ms_f.old ]; then mv $ms_f.old $ms_f; else rm -f $ms_f; fi
+		done
+		ms_log "nginx -t failed on the new config: nginx left as it was"
+		return 1
+	fi
+	rm -f $MS_EXTRA.old $MS_ROOTFILE.old
+	ms_reload
 }
 
 ms_on() {
 	[ -f $MS_ROOT/index.html ] || { ms_log "no Mainsail in $MS_ROOT"; return; }
 	ms_patch
-	mkdir -p /run/nginx
+	mkdir -p /run/nginx $MS_EXTRA_DIR
+	chmod 755 $MS_EXTRA_DIR
 	ms_ui=$(ms_port80)
 	if ! ms_build $ms_ui; then
 		ms_log "Kiln's nginx.conf changed shape: Fluidd stays on port 80"
-		rm -f $MS_CONF.new; return
+		rm -f $MS_EXTRA.new $MS_ROOTFILE.new; return
 	fi
-	if ms_running_with $MS_CONF && cmp -s $MS_CONF.new $MS_CONF; then
-		rm -f $MS_CONF.new; return
+	if ! ms_old_running && ms_nginx_running &&
+	   cmp -s $MS_EXTRA.new $MS_EXTRA && cmp -s $MS_ROOTFILE.new $MS_ROOTFILE; then
+		rm -f $MS_EXTRA.new $MS_ROOTFILE.new; return
 	fi
-	if ! $MS_NGINX -t -q -c $MS_CONF.new 2>/dev/null; then
-		ms_log "nginx -t failed on the built config: nginx left as it is"
-		rm -f $MS_CONF.new; return
-	fi
-	mv $MS_CONF.new $MS_CONF
-	chmod 644 $MS_CONF
-	start-stop-daemon -K -q -p $MS_PID
-	sleep 1
-	start-stop-daemon -S -q -x $MS_NGINX -p $MS_PID -- -c $MS_CONF
+	ms_apply || return
 	if [ $ms_ui = fluidd ]; then
 		ms_log "Fluidd on port 80, Mainsail on port 81"
 	else
@@ -197,21 +244,27 @@ ms_watch_stop() {
 
 ms_off() {
 	ms_watch_stop
-	ms_running_with $MS_CONF || return 0
-	start-stop-daemon -K -q -p $MS_PID
-	sleep 1
-	rm -f $MS_CONF
-	/etc/init.d/S63nginx start
+	rm -f $MS_EXTRA
+	[ -s $MS_KILN_ROOT ] && cp $MS_KILN_ROOT $MS_ROOTFILE
+	rm -f $MS_KILN_ROOT
+	ms_reload
 	ms_log "Kiln's nginx back: Fluidd on port 80"
 }
 
 case "$1" in
 off) ms_off ;;
+stop) ms_watch_stop ;;
 watch) ms_watch ;;
-*)
+start)
 	ms_on
+	ms_nginx_running || $MS_SERVICE start
 	if ! { [ -f $MS_WATCH_PID ] && kill -0 "$(cat $MS_WATCH_PID)" 2>/dev/null; }; then
 		start-stop-daemon -S -b -m -p $MS_WATCH_PID -x /bin/sh -- $MS_HOOK watch
 	fi
 	;;
+*)
+	echo "usage: $0 start|stop|off|watch"
+	exit 1
+	;;
 esac
+exit 0

@@ -11,16 +11,10 @@ to Fluidd:
 | 80 (`http://<printer>/`) | Mainsail |
 | 81 (`http://<printer>:81/`) | Fluidd |
 
-> **The boot hook is a stopgap.** This plugin needs a root boot hook,
-> and Kiln OS has none for plugins. `camera.conf`, used before, has been
-> read as settings only since Kiln v0.0.24, so `install.sh` now uses
-> `/data/ad5x/screen.conf`, which Kiln's screen service still runs as a
-> shell script at boot. A later Kiln release may close that too; then,
-> after each reboot, Fluidd is back on port 80 until you run
-> `sh /data/ad5x/mainsail-hook.sh` as root. A proper hook was requested
-> in [djvalic/kiln-os#13](https://github.com/djvalic/kiln-os/issues/13).
-> Installed before this change? Run `install.sh` again as root (it moves
-> the line out of `camera.conf`).
+> **Needs Kiln OS 1.0 (plugin API 1.6).** Version 2.0 uses Kiln's own
+> root scripts, boot hooks and extra nginx servers for plugins. On Kiln
+> v0.0.x, stay on the `main` branch (1.x, the `screen.conf` hook).
+> Coming from 1.x? See "Moving from 1.x" below.
 
 Both talk to the same Moonraker and Klipper and show the same cameras
 (`/webcam/`, ...) and touch screen view (`/screen/`). Settings are kept
@@ -32,42 +26,58 @@ Kiln's own Fluidd.
 ## Swapping the ports: `WEB`
 
 Run `WEB` in the console to swap the two: Fluidd on port 80, Mainsail on
-port 81. Run it again to swap back. nginx restarts with the new order
+port 81. Run it again to swap back. nginx reloads with the new order
 within about 3 seconds, so reload the page. The choice is kept across
 reboots (`web_port80` in `variables.cfg`).
 
 ## Install
 
-Two parts: the plugin itself (runs as user `klipper`), and a root part
-that a plugin can't install by itself. Over SSH as root (Kiln's default
-password is `root`):
+The plugin has a root part (`root/`) that switches nginx; Kiln asks
+before it runs anything as root. It isn't in Kiln's plugin catalog yet,
+so clone it over SSH (Kiln's default password is `root`):
 
 ```sh
 cd /data/ad5x/plugins
-su klipper -s /bin/sh -c 'git clone https://github.com/DIEHARDave/mainsail-kiln.git mainsail'
-sh /data/ad5x/plugins/mainsail/install.sh
+su klipper -s /bin/sh -c 'git clone -b kiln-v1 https://github.com/DIEHARDave/mainsail-kiln.git mainsail'
 ```
 
-`install.sh` downloads the latest Mainsail release (about 3 MB) into
-`/data/ad5x/web/mainsail`, then switches nginx over. Mainsail is on port
-80 as soon as it finishes.
-
-Then in the console (Mainsail, Fluidd or HelixScreen):
+Then in the console (Fluidd or HelixScreen):
 
 ```
-ENABLE_PLUGIN NAME=mainsail
+ENABLE_PLUGIN NAME=mainsail ROOT=1
 ```
 
-This restarts Klipper and Moonraker. After that, Software Updates lists
-`mainsail` (the UI) and `mainsail-kiln` (this plugin). The plugin also
-adds pass-through `PAUSE` / `RESUME` macros, because Mainsail warns
-without them.
+`ROOT=1` is your consent to run `root/install.sh` as root; read `root/`
+first if you like. It downloads the latest Mainsail release (about 3 MB)
+into `/data/ad5x/web/mainsail` and switches nginx over: Mainsail is on
+port 80 as soon as it finishes. Kiln then enables the plugin and
+restarts Klipper. After a Moonraker restart (or the next boot), Software
+Updates lists `mainsail` (the UI) and `mainsail-kiln` (this plugin). The
+plugin also adds pass-through `PAUSE` / `RESUME` macros, because
+Mainsail warns without them.
 
 ## Updates
 
 - **Mainsail:** Software Updates > `mainsail`.
-- **This plugin:** Software Updates > `mainsail-kiln`. If the update
-  changed `root/mainsail-hook.sh`, run `install.sh` again as root.
+- **This plugin:** Software Updates > `mainsail-kiln`, then `RESTART`
+  Klipper: when `root/` changed, Kiln runs `root/update.sh` by itself
+  (you agreed to that with `ROOT=1`).
+
+## Moving from 1.x
+
+1.x installed its root part by hand (`sh install.sh` over SSH, a line in
+`/data/ad5x/screen.conf`) and ran nginx from its own copy of Kiln's
+config. After updating to 2.0 Kiln warns that the plugin "got root
+scripts": run
+
+```
+DISABLE_PLUGIN NAME=mainsail
+ENABLE_PLUGIN NAME=mainsail ROOT=1
+```
+
+`root/install.sh` removes the old `screen.conf` line,
+`/data/ad5x/mainsail-hook.sh` and the old watcher, and moves nginx back
+to Kiln's own config with the second UI added. The `WEB` choice stays.
 
 ## Renamed for Kiln OS 1.0
 
@@ -83,73 +93,64 @@ Moonraker restart.
 ## How it works
 
 Kiln's `nginx.conf` sits on the read-only system partition and serves
-Fluidd on port 80. Only the line that points at Fluidd's folder,
-`/run/nginx/fluidd-root.conf`, is written at boot. The hook
-(`root/mainsail-hook.sh`, copied to `/data/ad5x/mainsail-hook.sh` and
-owned by root) does this at boot:
+port 80 from the folder named in `/run/nginx/fluidd-root.conf` (written
+at boot). It also reads root-owned extra servers from
+`/data/ad5x/nginx/*.conf`. Kiln's plugin API 1.6 copies the plugin's
+`root/` to `/data/ad5x/plugins-root/mainsail` (root-owned, so root never
+runs code from the clone user `klipper` can change) and runs it from
+there:
 
-1. It reads Kiln's `nginx.conf` and writes `/run/nginx/kiln-mainsail.conf`
-   with the server block twice:
-   - port 80 with `root /data/ad5x/web/mainsail;`;
-   - port 81 exactly as Kiln has it (Fluidd).
+- `install.sh` (at `ENABLE_PLUGIN ... ROOT=1`) and `update.sh` (after an
+  update that changed `root/`) put the boot script `S50mainsail` into
+  `/data/ad5x/plugins-root/init.d` and start it.
+- `S50mainsail` runs at every boot, a minute or so after the touch
+  screen (`S69ad5x-plugin-boot`). Until then Fluidd is on both ports.
+- `uninstall.sh` (at `DISABLE_PLUGIN` / `REMOVE_PLUGIN`) puts Kiln's own
+  setup back: Fluidd on port 80, nothing on 81.
 
-   Every location (Moonraker API, websocket, webcams, screen) is copied
-   from Kiln's file. So a Kiln update that changes nginx.conf is picked up
-   at the next boot.
-2. It checks the new file with `nginx -t`, then restarts nginx on it. It
-   uses Kiln's pid file, so `S63nginx stop` and `S63nginx reload` still
-   work.
+`mainsail-hook.sh start`:
 
-When `WEB` has saved `web_port80 = 'fluidd'`, the two roots are swapped:
-port 80 keeps Kiln's Fluidd line, port 81 gets Mainsail's. The macro
-runs as user `klipper` and can't restart nginx, so the hook also starts a
-small root watcher (`mainsail-hook.sh watch`, once per boot) that checks
-`variables.cfg` every 3 seconds and rebuilds the config when the value
-changes. The file is only parsed, never run.
+1. writes `/data/ad5x/nginx/mainsail.conf`: Kiln's port 80 server block
+   copied, on port 81, with the other UI's folder. Every location
+   (Moonraker API, websocket, webcams, screen) comes from Kiln's file, so
+   a Kiln update that changes it is picked up at the next boot.
+2. points `fluidd-root.conf` at Mainsail (Kiln's own Fluidd line is kept
+   for port 81 and for `off`).
+3. checks the result with `nginx -t` and reloads Kiln's nginx. If the
+   check fails, both files go back as they were.
+
+When `WEB` has saved `web_port80 = 'fluidd'`, the two are swapped: port
+80 keeps Kiln's Fluidd line, port 81 gets Mainsail. The macro runs as
+user `klipper` and can't touch nginx, so the hook also starts a small
+root watcher (`mainsail-hook.sh watch`) that checks `variables.cfg`
+every 3 seconds and rebuilds the files when the value changes. The file
+is only parsed, never run.
 
 **Kiln OS updates in Mainsail.** Kiln lists its own updates (`Kiln OS`,
 `klipper`, `moonraker`) under types Mainsail doesn't know, so plain
 Mainsail hides them; Fluidd shows them. The hook patches Mainsail's
 bundle in place so it lists them like any web client: version, Update
 button, release link. The watcher patches again after a Mainsail update.
-On the Mainsail port, `/assets/` is revalidated instead of cached for
-30 days, so browsers load the patched file. If a Mainsail release changes
+The service worker gets a new revision for the patched file, and on
+port 81 Mainsail's `/assets/` are revalidated instead of cached for 30
+days, so browsers load the patched file. If a Mainsail release changes
 that code, the patch is skipped and `/var/log/messages` says so.
 
 If Kiln's nginx.conf ever changes shape, or the check fails, nothing is
 switched: Fluidd stays on port 80, and `/var/log/messages` has a
-`kiln-mainsail` line saying why.
-
-**Boot hook.** Kiln OS has no root boot hook for plugins. Its screen
-service (`S65ad5x-screen`, root, runs after nginx starts) sources
-`/data/ad5x/screen.conf`, so `install.sh` adds
-`. /data/ad5x/mainsail-hook.sh` there. The screen service runs this
-even with the screen stream switched off (`SCREEN=off`). A screen
-restart sources it again, but it does nothing while nginx already runs
-the Mainsail config. [KILN_Camera](https://github.com/DIEHARDave/camera-kiln)
-and [FF_NFC](https://github.com/DIEHARDave/FF_NFC) use the same
-file; they don't interfere.
-
-`/etc/init.d/S63nginx restart` brings back Kiln's plain nginx (Fluidd on
-80) until the next boot. To switch back without rebooting, run
-`sh /data/ad5x/mainsail-hook.sh`.
-
-**Updating from 1.0.0:** `WEB` needs the new hook. Run `install.sh` once
-more as root after the update; until then `WEB` saves the setting but
-nothing applies it. The same goes for the Kiln OS entries in Mainsail
-(hook version 3).
+`kiln-mainsail` line saying why. The root scripts log to
+`/data/ad5x/kiln-log/plugins-root.log`.
 
 ## Uninstall
 
-As root:
-
-```sh
-sh /data/ad5x/plugins/mainsail/uninstall.sh            # keeps Mainsail's files
-sh /data/ad5x/plugins/mainsail/uninstall.sh --purge    # deletes them too
+```
+REMOVE_PLUGIN NAME=mainsail
 ```
 
-Fluidd is back on port 80 right away. Then run
-`DISABLE_PLUGIN NAME=mainsail` and delete `/data/ad5x/plugins/mainsail`.
+(or `DISABLE_PLUGIN NAME=mainsail` to keep the clone). Kiln runs
+`root/uninstall.sh` first: Fluidd is back on port 80 right away.
+Mainsail's files stay in `/data/ad5x/web/mainsail`; delete them as root
+if you like.
 
 ## License
 

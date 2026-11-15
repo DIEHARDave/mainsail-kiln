@@ -59,15 +59,22 @@ ENABLE_PLUGIN NAME=mainsail
 ```
 
 This restarts Klipper and Moonraker. After that, Software Updates lists
-`mainsail` (the UI) and `kiln-mainsail` (this plugin). The plugin also
+`mainsail` (the UI) and `mainsail-kiln` (this plugin). The plugin also
 adds pass-through `PAUSE` / `RESUME` macros, because Mainsail warns
 without them.
 
 ## Updates
 
 - **Mainsail:** Software Updates > `mainsail`.
-- **This plugin:** Software Updates > `kiln-mainsail`. If the update
+- **This plugin:** Software Updates > `mainsail-kiln`. If the update
   changed `root/mainsail-hook.sh`, run `install.sh` again as root.
+
+## Renamed for Kiln OS 1.0
+
+Kiln OS 1.0 keeps names that start with `kiln` for itself, so the
+Software Updates entry is now `mainsail-kiln` (was `kiln-mainsail`). Nothing else
+changes. It shows under the new name after the next update and
+Moonraker restart.
 
 ## How it works
 

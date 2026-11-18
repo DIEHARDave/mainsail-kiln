@@ -37,12 +37,15 @@
 # browsers pick it up.
 #####################################################################
 
-MS_HOOK_VERSION=5
+MS_HOOK_VERSION=6
 
 MS_ROOT=/data/ad5x/web/mainsail
 MS_KILN_CONF=/etc/nginx/nginx.conf
 MS_EXTRA_DIR=/data/ad5x/nginx
 MS_EXTRA=$MS_EXTRA_DIR/mainsail.conf
+# Other plugins' nginx snippets for the port 81 server, included in it
+# (a folder: Kiln includes $MS_EXTRA_DIR/*.conf as whole servers)
+MS_X81=$MS_EXTRA_DIR/port81.d
 MS_ROOTFILE=/run/nginx/fluidd-root.conf
 MS_KILN_ROOT=/run/kiln-mainsail.fluidd-root
 MS_OLD_CONF=/run/nginx/kiln-mainsail.conf
@@ -143,7 +146,7 @@ ms_build() {
 		echo "root $MS_ROOT;" > $MS_ROOTFILE.new
 		ms_r81=$ms_fluidd; ms_m81=0
 	fi
-	awk -v r81="$ms_r81" -v m81=$ms_m81 '
+	awk -v r81="$ms_r81" -v m81=$ms_m81 -v x81=$MS_X81 '
 	BEGIN {
 		print "# mainsail-kiln (root): the second web UI on port 81, a copy of"
 		print "# Kiln OS port 80 server. The plugin rewrites it: do not edit."
@@ -154,13 +157,21 @@ ms_build() {
 		if (l ~ /include[ \t]+\/run\/nginx\/fluidd-root\.conf;/) {
 			sub(/include.*/, r81, l); found_root = 1
 		}
-		if (sub(/listen[ \t]+80[ \t]+default_server;/, "listen 81;", l))
-			found_listen = 1
+		if (sub(/listen[ \t]+80[ \t]+default_server;/, "listen 81;", l)) {
+			found_listen = 1; extra = 1
+		}
 		# Mainsail assets revalidated (304s), not cached 30 days:
 		# browsers get the bundle ms_patch rewrote under the same name
 		if (m81 && l ~ /expires[ \t]+30d;/)
 			sub(/expires.*/, "add_header Cache-Control \"no-cache\";", l)
 		print l
+		# Locations of other plugins for port 81 (the settings page of
+		# diehard-pushraker): their snippets in port81.d
+		if (extra) {
+			ws = l; sub(/[^ \t].*/, "", ws)
+			print ws "include " x81 "/*.conf;"
+			extra = 0
+		}
 		line = $0; sub(/#.*/, "", line)
 		depth += gsub(/\{/, "{", line) - gsub(/\}/, "}", line)
 		if (depth == 0) { inblk = 0; done = 1 }
@@ -207,8 +218,8 @@ ms_apply() {
 ms_on() {
 	[ -f $MS_ROOT/index.html ] || { ms_log "no Mainsail in $MS_ROOT"; return; }
 	ms_patch
-	mkdir -p /run/nginx $MS_EXTRA_DIR
-	chmod 755 $MS_EXTRA_DIR
+	mkdir -p /run/nginx $MS_EXTRA_DIR $MS_X81
+	chmod 755 $MS_EXTRA_DIR $MS_X81
 	ms_ui=$(ms_port80)
 	if ! ms_build $ms_ui; then
 		ms_log "Kiln's nginx.conf changed shape: Fluidd stays on port 80"

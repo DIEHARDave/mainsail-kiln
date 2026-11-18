@@ -113,7 +113,10 @@ there:
 1. writes `/data/ad5x/nginx/mainsail.conf`: Kiln's port 80 server block
    copied, on port 81, with the other UI's folder. Every location
    (Moonraker API, websocket, webcams, screen) comes from Kiln's file, so
-   a Kiln update that changes it is picked up at the next boot.
+   a Kiln update that changes it is picked up at the next boot. It also
+   includes `/data/ad5x/nginx/port81.d/*.conf`, so other plugins can add
+   pages to port 81 ([diehard-pushraker](https://github.com/DIEHARDave/diehard-pushraker)'s
+   settings page).
 2. points `fluidd-root.conf` at Mainsail (Kiln's own Fluidd line is kept
    for port 81 and for `off`).
 3. checks the result with `nginx -t` and reloads Kiln's nginx. If the

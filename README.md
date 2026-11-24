@@ -11,9 +11,10 @@ to Fluidd:
 | 80 (`http://<printer>/`) | Mainsail |
 | 81 (`http://<printer>:81/`) | Fluidd |
 
-> **Needs Kiln OS 1.0 (plugin API 1.6).** Version 2.0 uses Kiln's own
-> root scripts, boot hooks and extra nginx servers for plugins. On Kiln
-> v0.0.x, stay on the `main` branch (1.x, the `screen.conf` hook).
+> **Needs Kiln OS 1.0 or later (plugin API 1.6).** Version 2.0 uses
+> Kiln's own root scripts, boot hooks and extra nginx servers for
+> plugins. On Kiln v0.0.x, use the `kiln-v0` branch (1.x, the
+> `screen.conf` hook).
 > Coming from 1.x? See "Moving from 1.x" below.
 
 Both talk to the same Moonraker and Klipper and show the same cameras
@@ -38,7 +39,7 @@ so clone it over SSH (Kiln's default password is `root`):
 
 ```sh
 cd /data/ad5x/plugins
-su klipper -s /bin/sh -c 'git clone -b kiln-v1 https://github.com/DIEHARDave/mainsail-kiln.git mainsail'
+su klipper -s /bin/sh -c 'git clone https://github.com/DIEHARDave/mainsail-kiln.git mainsail'
 ```
 
 Then in the console (Fluidd or HelixScreen):
@@ -62,6 +63,10 @@ Mainsail warns without them.
 - **This plugin:** Software Updates > `mainsail-kiln`, then `RESTART`
   Klipper: when `root/` changed, Kiln runs `root/update.sh` by itself
   (you agreed to that with `ROOT=1`).
+
+On the `kiln-v1` branch from the Kiln 1.0 test builds? Switch the clone
+to `main`, or Software Updates marks it invalid:
+`su klipper -s /bin/sh -c 'git -C /data/ad5x/plugins/mainsail checkout main'`.
 
 ## Moving from 1.x
 

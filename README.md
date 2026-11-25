@@ -53,9 +53,10 @@ first if you like. It downloads the latest Mainsail release (about 3 MB)
 into `/data/ad5x/web/mainsail` and switches nginx over: Mainsail is on
 port 80 as soon as it finishes. Kiln then enables the plugin and
 restarts Klipper. After a Moonraker restart (or the next boot), Software
-Updates lists `mainsail` (the UI) and `mainsail-kiln` (this plugin). The
-plugin also adds pass-through `PAUSE` / `RESUME` macros, because
-Mainsail warns without them.
+Updates lists `mainsail` (the UI) and `mainsail-kiln` (this plugin).
+`PAUSE` / `RESUME` macros come from Kiln OS itself (zmod-compat, v1.0.1
+and later). On Kiln OS v1.0.0 Mainsail shows a harmless "gcode_macro
+pause/resume is not defined" notice; pausing still works.
 
 ## Updates
 
